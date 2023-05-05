@@ -1,0 +1,59 @@
+import cv2
+import pyzed.sl as sl
+import numpy as np
+import open3d as o3d
+import os
+import pyntcloud
+
+# Initialize the ZED camera
+zed = sl.Camera()
+init_params = sl.InitParameters()
+init_params.camera_resolution = sl.RESOLUTION.HD720
+init_params.camera_fps = 30
+init_params.depth_mode = sl.DEPTH_MODE.NONE
+init_params.coordinate_units = sl.UNIT.METER
+err = zed.open(init_params)
+if err != sl.ERROR_CODE.SUCCESS:
+    exit(1)
+
+# Capture images and extract dimensions
+images = []
+dimensions = []
+for i in range(8):
+    # Capture an image
+    image = sl.Mat()
+    err = zed.grab()
+    if err == sl.ERROR_CODE.SUCCESS:
+        zed.retrieve_image(image, sl.VIEW.LEFT)
+        images.append(image.get_data())
+
+        # Extract dimensions
+        gray = cv2.cvtColor(image.get_data(), cv2.COLOR_BGR2GRAY)
+        ret, thresh = cv2.threshold(gray, 127, 255, 0)
+        contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            x, y, w, h = cv2.boundingRect(cnt)
+            dimensions.append((w, h))
+
+# Create 3D model using photogrammetry
+point_cloud = o3d.geometry.PointCloud()
+for i, image in enumerate(images):
+    color = o3d.geometry.Image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    depth = o3d.geometry.Image(np.array(zed.retrieve_measure(sl.MEASURE.DEPTH)).astype(np.float32))
+    rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(color, depth, depth_scale=1.0, convert_rgb_to_intensity=False)
+    pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, o3d.camera.PinholeCameraIntrinsic(width=720, height=404, fx=700, fy=700, cx=360, cy=202))
+    point_cloud += pcd
+
+# Export 3D model to OBJ file
+o3d.io.write_triangle_mesh("object.obj", point_cloud)
+
+
+# Load the point cloud data from the ZED camera
+cloud = pyntcloud.PyntCloud.from_file("point_cloud.ply")
+
+# Extract the dimensions of the point cloud
+dimensions = np.ptp(cloud.points, axis=0)
+
+print("Dimensions:", dimensions)
+
+
